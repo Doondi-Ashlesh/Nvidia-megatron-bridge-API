@@ -194,7 +194,8 @@ class TestCancelJob:
         assert resp.json()["status"] == "cancelling"
         mock_term.assert_called_once_with(9999)
 
-    async def test_cancel_completed_job_returns_409(self, client: AsyncClient):
+    async def test_delete_completed_job_returns_202(self, client: AsyncClient):
+        """Deleting a completed job permanently removes it and returns 202."""
         import aiosqlite
         import app.config as cfg
 
@@ -208,9 +209,11 @@ class TestCancelJob:
             await db.commit()
 
         resp = await client.delete(f"/v1/jobs/{job_id}")
-        assert resp.status_code == 409
+        assert resp.status_code == 202
+        assert resp.json().get("deleted") is True
 
-    async def test_cancel_failed_job_returns_409(self, client: AsyncClient):
+    async def test_delete_failed_job_returns_202(self, client: AsyncClient):
+        """Deleting a failed job permanently removes it and returns 202."""
         import aiosqlite
         import app.config as cfg
 
@@ -224,7 +227,8 @@ class TestCancelJob:
             await db.commit()
 
         resp = await client.delete(f"/v1/jobs/{job_id}")
-        assert resp.status_code == 409
+        assert resp.status_code == 202
+        assert resp.json().get("deleted") is True
 
     async def test_cancel_missing_job_returns_404(self, client: AsyncClient):
         resp = await client.delete(f"/v1/jobs/{uuid.uuid4()}")

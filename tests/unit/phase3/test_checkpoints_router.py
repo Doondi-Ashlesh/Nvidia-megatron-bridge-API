@@ -106,6 +106,7 @@ async def test_export_returns_202_with_job_id(client, db):
         json={
             "source_name": "source-ckpt",
             "target_name": "source-ckpt-hf",
+            "model_arch": "meta-llama/Llama-3-8B",
         },
     )
     assert resp.status_code == 202
@@ -120,6 +121,7 @@ async def test_export_nonexistent_source_returns_404(client):
         json={
             "source_name": "does-not-exist",
             "target_name": "output-hf",
+            "model_arch": "meta-llama/Llama-3-8B",
         },
     )
     assert resp.status_code == 404
@@ -132,6 +134,7 @@ async def test_export_path_traversal_source_returns_400(client):
         json={
             "source_name": "../../../etc",
             "target_name": "valid-target",
+            "model_arch": "meta-llama/Llama-3-8B",
         },
     )
     assert resp.status_code == 400
@@ -144,6 +147,7 @@ async def test_export_path_traversal_target_returns_400(client):
         json={
             "source_name": "valid-source",
             "target_name": "../../../etc/passwd",
+            "model_arch": "meta-llama/Llama-3-8B",
         },
     )
     assert resp.status_code == 400

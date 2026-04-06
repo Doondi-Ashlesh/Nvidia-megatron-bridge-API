@@ -54,6 +54,13 @@ class Settings(BaseSettings):
         default=1,
         description="Maximum number of GPU jobs that may run simultaneously.",
     )
+    max_queued_jobs: Annotated[int, Field(ge=1)] = Field(
+        default=100,
+        description=(
+            "Maximum number of jobs that may sit in QUEUED state at once. "
+            "Requests that would exceed this limit are rejected with HTTP 429."
+        ),
+    )
     dispatcher_poll_interval_s: Annotated[float, Field(gt=0)] = Field(
         default=2.0,
         description="How often (seconds) the dispatcher checks for queued jobs.",
@@ -61,6 +68,11 @@ class Settings(BaseSettings):
     cuda_visible_devices: str = Field(
         default="0",
         description="Comma-separated GPU indices passed to worker subprocesses.",
+    )
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    rate_limit_requests: Annotated[int, Field(ge=1)] = Field(
+        default=60,
+        description="Maximum write requests (POST/DELETE) per IP per minute.",
     )
 
     # ── API Server ────────────────────────────────────────────────────────────
@@ -84,6 +96,18 @@ class Settings(BaseSettings):
         if not self.cors_origins.strip():
             return []
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    # Set API_KEY to a non-empty secret to enable Bearer token authentication.
+    # Leave empty (default) to run without auth — only suitable for local/VPN use.
+    # Exempt paths: /health, /health/ready, /docs, /redoc, /openapi.json
+    api_key: str = Field(
+        default="",
+        description=(
+            "Static Bearer token that clients must send as 'Authorization: Bearer <key>'. "
+            "Empty string disables auth entirely."
+        ),
+    )
 
     # ── Optional: S3 ─────────────────────────────────────────────────────────
     s3_enabled: bool = Field(default=False)

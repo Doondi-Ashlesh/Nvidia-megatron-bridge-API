@@ -47,7 +47,7 @@ def test_import_calls_autobridge_import_ckpt():
         "source_path": "meta-llama/Llama-3-8B",
         "target_path": "/data/checkpoints/llama3",
     }
-    job = {"payload": json.dumps(payload)}
+    job = {"id": "test-job-id", "payload": json.dumps(payload)}
 
     handle_checkpoint_import(job)
 
@@ -68,7 +68,7 @@ def test_import_sets_hf_token_env_var():
         "target_path": "/data/checkpoints/llama3",
         "hf_token": secret,
     }
-    job = {"payload": json.dumps(payload)}
+    job = {"id": "test-job-id", "payload": json.dumps(payload)}
 
     os.environ.pop("HF_TOKEN", None)
     handle_checkpoint_import(job)
@@ -91,7 +91,7 @@ def test_import_hf_token_popped_from_payload():
         "target_path": "/data/checkpoints/out",
         "hf_token": "hf_tok",
     }
-    job = {"payload": json.dumps(payload)}
+    job = {"id": "test-job-id", "payload": json.dumps(payload)}
 
     handle_checkpoint_import(job)
 
@@ -114,7 +114,7 @@ def test_export_calls_from_hf_pretrained():
         "target_path": "/data/checkpoints/hf-out",
         "model_arch": "meta-llama/Llama-3-8B",
     }
-    job = {"payload": json.dumps(payload)}
+    job = {"id": "test-job-id", "payload": json.dumps(payload)}
 
     handle_checkpoint_export(job)
 
@@ -134,7 +134,7 @@ def test_export_calls_export_ckpt_with_correct_paths():
         "target_path": "/data/checkpoints/hf-out",
         "model_arch": "meta-llama/Llama-3-8B",
     }
-    job = {"payload": json.dumps(payload)}
+    job = {"id": "test-job-id", "payload": json.dumps(payload)}
 
     handle_checkpoint_export(job)
 
@@ -155,7 +155,7 @@ def test_export_empty_model_arch_still_calls_from_hf_pretrained():
         "source_path": "/data/checkpoints/src",
         "target_path": "/data/checkpoints/dst",
     }
-    job = {"payload": json.dumps(payload)}
+    job = {"id": "test-job-id", "payload": json.dumps(payload)}
 
     handle_checkpoint_export(job)
 

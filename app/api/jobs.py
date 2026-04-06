@@ -116,9 +116,11 @@ async def get_job(
 )
 async def get_job_logs(
     job_id: str,
+    line_offset: int = Query(default=0, ge=0, description="Skip first N lines"),
+    line_limit: int = Query(default=2000, ge=1, le=10000, description="Max lines to return"),
     db: aiosqlite.Connection = Depends(get_db),
 ):  # type: ignore[return]
-    """Return the raw log file contents as plain text."""
+    """Return log file lines as plain text, with optional line-based pagination."""
     import aiofiles
     from fastapi.responses import PlainTextResponse
 
@@ -132,7 +134,6 @@ async def get_job_logs(
     log_path_str = row.get("log_path")
 
     if not log_path_str:
-        # Job hasn't started yet — return empty log
         return PlainTextResponse("")
 
     try:
@@ -145,7 +146,10 @@ async def get_job_logs(
 
     async with aiofiles.open(log_path, encoding="utf-8", errors="replace") as f:
         content = await f.read()
-    return PlainTextResponse(content)
+
+    lines = content.splitlines()
+    page = lines[line_offset: line_offset + line_limit]
+    return PlainTextResponse("\n".join(page))
 
 
 # ---------------------------------------------------------------------------
@@ -153,25 +157,53 @@ async def get_job_logs(
 # ---------------------------------------------------------------------------
 
 
+_TERMINAL_STATUSES = frozenset({
+    JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED,
+})
+
+
 @router.delete(
     "/{job_id}",
     status_code=202,
-    summary="Cancel a job",
+    summary="Cancel an active job, or permanently delete a terminal job and its log file",
     responses={404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}},
 )
-async def cancel_job(
+async def cancel_or_delete_job(
     job_id: str,
     db: aiosqlite.Connection = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
+    """
+    - **QUEUED / RUNNING**: cancels the job (returns 202 with new status).
+    - **COMPLETED / FAILED / CANCELLED**: permanently deletes the DB record
+      and removes the associated log file from disk (returns 202 with `deleted: true`).
+    """
+    import aiofiles.os  # noqa: PLC0415
+
+    from app import config as _cfg  # noqa: PLC0415
+    from app.utils.paths import PathTraversalError, safe_log_path  # noqa: PLC0415
+
     if not is_valid_uuid(job_id):
         raise HTTPException(status_code=400, detail="job_id must be a valid UUID")
 
     row = _assert_job_exists(await job_service.get_job(db, job_id), job_id)
     current_status = JobStatus(row["status"])
 
+    # Terminal jobs: delete record + log file
+    if current_status in _TERMINAL_STATUSES:
+        await job_service.delete_job(db, job_id)
+
+        # Best-effort log file removal — don't 500 if file is already gone
+        try:
+            log_path = safe_log_path(_cfg.settings.logs_root, job_id)
+            if log_path.exists():
+                await aiofiles.os.remove(log_path)
+        except (PathTraversalError, OSError):
+            pass
+
+        return {"job_id": job_id, "deleted": True}
+
     try:
         if current_status == JobStatus.QUEUED:
-            # Queued jobs can be cancelled directly (no worker to kill)
             await job_service.transition_to_cancelled(db, job_id)
             return {"job_id": job_id, "status": JobStatus.CANCELLED}
 
@@ -181,7 +213,7 @@ async def cancel_job(
                 terminate_worker(pid)
             return {"job_id": job_id, "status": JobStatus.CANCELLING}
 
-        # Terminal or already cancelling — conflict
+        # CANCELLING — already on the way out
         raise HTTPException(
             status_code=409,
             detail=f"Cannot cancel job in status {current_status.value!r}",

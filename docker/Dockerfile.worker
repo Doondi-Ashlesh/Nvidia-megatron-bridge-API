@@ -1,0 +1,45 @@
+# ── MegatronBridge GPU Worker ─────────────────────────────────────────────────
+# Runs inside the NGC NeMo container which already ships:
+#   CUDA 12.x, cuDNN, NCCL, TransformerEngine, PyTorch ≥2.7
+#
+# This is the ONLY container that imports megatron.bridge.
+# megatron-bridge requires: CUDA >= 12.8, PyTorch >= 2.7, Python >= 3.12
+FROM nvcr.io/nvidia/nemo:25.02
+
+LABEL org.opencontainers.image.title="megatronbridge-api-worker" \
+      org.opencontainers.image.description="GPU worker for MegatronBridge API (torchrun executor)"
+
+# Security: run as non-root
+RUN groupadd --gid 1001 appgroup 2>/dev/null || true && \
+    useradd  --uid 1001 --gid appgroup --no-create-home appuser 2>/dev/null || true
+
+WORKDIR /app
+
+# ── megatron-bridge install ───────────────────────────────────────────────────
+# --no-build-isolation is required because TransformerEngine (a dep) needs
+# the pre-installed CUDA toolkit visible during build.
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir --upgrade pip setuptools pybind11 wheel && \
+    pip install --no-cache-dir --no-build-isolation "megatron-bridge>=0.3.1"
+
+# ── Application code ──────────────────────────────────────────────────────────
+COPY app/ ./app/
+COPY migrations/ ./migrations/
+
+RUN mkdir -p /data/logs /data/checkpoints /data/hf_cache && \
+    chown -R appuser:appgroup /data /app
+
+USER appuser
+
+ENV DATA_DIR=/data \
+    DATABASE_URL=sqlite+aiosqlite:///megatronbridge.db \
+    CHECKPOINTS_ROOT=/data/checkpoints \
+    LOGS_ROOT=/data/logs \
+    HF_CACHE_DIR=/data/hf_cache \
+    LOG_LEVEL=INFO
+
+# Worker is launched by the API dispatcher via torchrun, not directly.
+# Actual invocation (by dispatcher):
+#   torchrun --nproc-per-node=N -m app.worker.executor --job-id <uuid>
+CMD ["python", "-c", \
+     "raise SystemExit('This container is launched by torchrun. Direct execution is not supported.')"]

@@ -20,9 +20,14 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# How often (seconds) the progress watcher polls the log file during training
+_PROGRESS_POLL_INTERVAL = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +106,116 @@ def fail_job(job_id: str, error: str) -> None:
     logger.error("Job %s failed: %s", job_id, error)
 
 
+def register_checkpoint_sync(
+    *,
+    name: str,
+    fmt: str,
+    path: str,
+    model_arch: str | None,
+    job_id: str,
+) -> None:
+    """Insert a checkpoint record into the DB using synchronous sqlite3.
+
+    Called from the executor after a successful import or export so the
+    API layer can immediately see the new checkpoint via GET /v1/checkpoints.
+    """
+    import uuid  # noqa: PLC0415
+
+    db_path = _get_db_path()
+    checkpoint_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO checkpoints "
+            "(id, name, format, path, model_arch, created_from_job, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (checkpoint_id, name, fmt, path, model_arch, job_id, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info("Checkpoint registered: name=%s format=%s path=%s", name, fmt, path)
+
+
+# ---------------------------------------------------------------------------
+# Progress watcher — background thread that tails log + writes GPU telemetry
+# ---------------------------------------------------------------------------
+
+
+def _get_log_path(job_id: str) -> Path:
+    """Derive the log file path from DATABASE_URL environment variable."""
+    db_path = Path(_get_db_path())
+    # Logs live in ../logs/ relative to the DB file, matching app.config defaults
+    logs_root = Path(os.environ.get("LOGS_ROOT", str(db_path.parent / "logs")))
+    return logs_root / f"{job_id}.log"
+
+
+def _get_gpu_telemetry() -> list[dict]:  # type: ignore[type-arg]
+    """Read GPU telemetry via pynvml. Returns [] gracefully on any error."""
+    try:
+        import pynvml  # noqa: PLC0415
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        gpus = []
+        for i in range(count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            raw_name = pynvml.nvmlDeviceGetName(handle)
+            name = raw_name.decode() if isinstance(raw_name, bytes) else str(raw_name)
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            temp = pynvml.nvmlDeviceGetTemperature(handle, 0)
+            gpus.append({
+                "id": i,
+                "name": name.rstrip("\x00"),
+                "util_pct": util.gpu,
+                "mem_used_gb": round(mem.used / 1024**3, 2),
+                "mem_total_gb": round(mem.total / 1024**3, 2),
+                "temp_c": temp,
+            })
+        pynvml.nvmlShutdown()
+        return gpus
+    except Exception:  # noqa: BLE001
+        return []
+
+
+class _ProgressWatcher:
+    """Background thread: polls log file + GPU, writes progress to DB.
+
+    Used as a context manager around the SDK training call so the watcher
+    starts before the SDK runs and stops cleanly when it finishes.
+    """
+
+    def __init__(self, job_id: str) -> None:
+        self._job_id = job_id
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self) -> _ProgressWatcher:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        from app.services.log_service import (  # noqa: PLC0415
+            tail_log_for_progress,
+            update_job_progress_sync,
+        )
+
+        log_path = _get_log_path(self._job_id)
+        while not self._stop.wait(_PROGRESS_POLL_INTERVAL):
+            try:
+                frame = tail_log_for_progress(log_path) or {}
+                frame["gpus"] = _get_gpu_telemetry()
+                if frame:
+                    update_job_progress_sync(self._job_id, frame)
+            except Exception:  # noqa: BLE001
+                logger.debug("Progress watcher error (non-fatal)", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Job handlers — real megatron-bridge API (verified v0.3.1)
 # ---------------------------------------------------------------------------
@@ -131,6 +246,16 @@ def handle_checkpoint_import(job: dict) -> None:  # type: ignore[type-arg]
         megatron_path=payload["target_path"],
     )
 
+    # Register the resulting Megatron checkpoint so GET /v1/checkpoints sees it
+    target_path = payload["target_path"]
+    register_checkpoint_sync(
+        name=target_path.rstrip("/").split("/")[-1],
+        fmt="megatron",
+        path=target_path,
+        model_arch=payload.get("model_arch"),
+        job_id=job["id"],
+    )
+
 
 def handle_checkpoint_export(job: dict) -> None:  # type: ignore[type-arg]
     """Convert a Megatron checkpoint to HuggingFace format.
@@ -158,6 +283,16 @@ def handle_checkpoint_export(job: dict) -> None:  # type: ignore[type-arg]
         hf_path=payload["target_path"],
         show_progress=True,
         strict=False,
+    )
+
+    # Register the resulting HF checkpoint
+    target_path = payload["target_path"]
+    register_checkpoint_sync(
+        name=target_path.rstrip("/").split("/")[-1],
+        fmt="hf",
+        path=target_path,
+        model_arch=model_arch or None,
+        job_id=job["id"],
     )
 
 
@@ -211,7 +346,8 @@ def handle_pretrain(job: dict) -> None:  # type: ignore[type-arg]
         ),
     )
 
-    pretrain(config, forward_step)
+    with _ProgressWatcher(job["id"]):
+        pretrain(config, forward_step)
 
 
 def handle_finetune(job: dict) -> None:  # type: ignore[type-arg]
@@ -250,7 +386,8 @@ def handle_finetune(job: dict) -> None:  # type: ignore[type-arg]
         ),
     )
 
-    finetune(config, forward_step)
+    with _ProgressWatcher(job["id"]):
+        finetune(config, forward_step)
 
 
 def handle_lora(job: dict) -> None:  # type: ignore[type-arg]
@@ -304,7 +441,8 @@ def handle_lora(job: dict) -> None:  # type: ignore[type-arg]
         peft=lora,
     )
 
-    finetune(config, forward_step)
+    with _ProgressWatcher(job["id"]):
+        finetune(config, forward_step)
 
 
 def handle_dora(job: dict) -> None:  # type: ignore[type-arg]
@@ -355,7 +493,8 @@ def handle_dora(job: dict) -> None:  # type: ignore[type-arg]
         peft=dora,
     )
 
-    finetune(config, forward_step)
+    with _ProgressWatcher(job["id"]):
+        finetune(config, forward_step)
 
 
 # ---------------------------------------------------------------------------

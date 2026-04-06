@@ -149,6 +149,7 @@ async def export_checkpoint(
     payload = {
         "source_path": str(source_path),
         "target_path": str(target_path),
+        "model_arch": req.model_arch,
         "num_gpus": req.num_gpus,
     }
 

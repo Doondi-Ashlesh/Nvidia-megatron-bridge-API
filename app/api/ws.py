@@ -12,7 +12,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app import config as _cfg
 from app.schemas.common import JobStatus
-from app.services import gpu_service, job_service
+from app.services import job_service
 from app.utils.paths import PathTraversalError, safe_log_path
 from app.worker.launcher import is_valid_uuid
 
@@ -193,15 +193,27 @@ async def ws_job_progress(websocket: WebSocket, job_id: str) -> None:
                 await websocket.close()
                 return
 
-            # Build progress frame
-            gpus = gpu_service.get_all_gpu_info()
-            progress_value = current_row.get("progress")
+            # Build progress frame.
+            # GPU telemetry is written into jobs.progress by the executor's
+            # _ProgressWatcher thread (running inside the GPU worker process).
+            # The API server is CPU-only and must NOT call gpu_service directly.
+            progress_raw = current_row.get("progress")
+            try:
+                progress_data: dict = (
+                    json.loads(progress_raw) if isinstance(progress_raw, str) else {}
+                )
+            except (json.JSONDecodeError, ValueError):
+                progress_data = {}
+
+            # Split gpus out to a top-level field so the frame matches the
+            # documented WebSocket protocol shape.
+            gpus = progress_data.pop("gpus", [])
 
             frame = {
                 "type": "progress",
                 "job_id": job_id,
                 "status": current_status.value,
-                "progress": progress_value,
+                "progress": progress_data,
                 "gpus": gpus,
             }
 

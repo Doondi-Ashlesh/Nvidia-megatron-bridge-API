@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.database import get_db
-from app.schemas.common import JobCreatedResponse, JobType
+from app.schemas.common import JobCreatedResponse, JobListResponse, JobResponse, JobType
 from app.schemas.training import DoRARequest, LoRARequest
 from app.services import checkpoint_service, job_service
 from app.services.training_service import pydantic_to_sdk_config
@@ -17,6 +17,24 @@ from app.utils.paths import PathTraversalError, resolve_safe_path, safe_checkpoi
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/peft", tags=["PEFT"])
+
+
+def _row_to_response(row: dict) -> JobResponse:  # type: ignore[type-arg]
+    from app.schemas.common import JobStatus  # noqa: PLC0415
+    return JobResponse(
+        id=row["id"],
+        type=JobType(row["type"]),
+        status=JobStatus(row["status"]),
+        payload=row.get("payload") or {},
+        error=row.get("error"),
+        progress=row.get("progress"),
+        log_path=row.get("log_path"),
+        pid=row.get("pid"),
+        num_gpus=row.get("num_gpus", 1),
+        created_at=row["created_at"],
+        started_at=row.get("started_at"),
+        completed_at=row.get("completed_at"),
+    )
 
 
 def _get_settings():  # type: ignore[return]
@@ -54,6 +72,33 @@ async def _assert_checkpoint_name_exists(
             status_code=404,
             detail=f"Checkpoint {checkpoint_name!r} not found",
         )
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/peft
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "",
+    response_model=JobListResponse,
+    summary="List LoRA and DoRA jobs",
+)
+async def list_peft_jobs(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> JobListResponse:
+    items, total = await job_service.list_jobs(
+        db,
+        job_types=[JobType.LORA, JobType.DORA],
+        limit=limit,
+        offset=offset,
+    )
+    return JobListResponse(
+        items=[_row_to_response(r) for r in items],
+        total=total,
+    )
 
 
 # ---------------------------------------------------------------------------

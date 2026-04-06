@@ -37,57 +37,60 @@ def get_gpu_count() -> int:
     try:
         pynvml = _get_pynvml()
         pynvml.nvmlInit()
-        count = pynvml.nvmlDeviceGetCount()
-        pynvml.nvmlShutdown()
-        return int(count)
+        try:
+            return int(pynvml.nvmlDeviceGetCount())
+        finally:
+            pynvml.nvmlShutdown()
     except Exception:
         return 0
 
 
-def get_gpu_info(index: int) -> dict[str, Any]:
-    """Return telemetry dict for a single GPU, or empty dict on any error."""
+def get_all_gpu_info() -> list[dict[str, Any]]:
+    """Return telemetry for all GPUs in a single nvmlInit/Shutdown cycle.
+
+    Returns [] on any error.
+    """
     try:
         pynvml = _get_pynvml()
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+        try:
+            count = pynvml.nvmlDeviceGetCount()
+            gpus = []
+            for i in range(count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
 
-        raw_name = pynvml.nvmlDeviceGetName(handle)
-        if isinstance(raw_name, bytes):
-            name = raw_name.decode("utf-8").rstrip("\x00")
-        else:
-            name = str(raw_name).rstrip("\x00")
+                raw_name = pynvml.nvmlDeviceGetName(handle)
+                name = (raw_name.decode("utf-8") if isinstance(raw_name, bytes)
+                        else str(raw_name)).rstrip("\x00")
 
-        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        temp = pynvml.nvmlDeviceGetTemperature(handle, 0)
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                temp = pynvml.nvmlDeviceGetTemperature(handle, 0)
 
-        pynvml.nvmlShutdown()
-
-        mem_used_gb = mem.used / (1024**3)
-        mem_total_gb = mem.total / (1024**3)
-
-        peak_tflops: float | None = GPU_PEAK_TFLOPS.get(name)
-
-        return {
-            "id": index,
-            "name": name,
-            "util_pct": util.gpu,
-            "mem_used_gb": mem_used_gb,
-            "mem_total_gb": mem_total_gb,
-            "temp_c": temp,
-            "peak_tflops": peak_tflops,
-        }
-    except Exception:
-        return {}
-
-
-def get_all_gpu_info() -> list[dict[str, Any]]:
-    """Return telemetry for all GPUs. Returns [] on any error."""
-    try:
-        count = get_gpu_count()
-        return [get_gpu_info(i) for i in range(count)]
+                gpus.append({
+                    "id": i,
+                    "name": name,
+                    "util_pct": util.gpu,
+                    "mem_used_gb": round(mem.used / 1024**3, 2),
+                    "mem_total_gb": round(mem.total / 1024**3, 2),
+                    "temp_c": temp,
+                    "peak_tflops": GPU_PEAK_TFLOPS.get(name),
+                })
+            return gpus
+        finally:
+            pynvml.nvmlShutdown()
     except Exception:
         return []
+
+
+def get_gpu_info(index: int) -> dict[str, Any]:
+    """Return telemetry dict for a single GPU, or empty dict on any error.
+
+    Prefer ``get_all_gpu_info()`` when querying multiple GPUs to avoid
+    repeated nvmlInit/Shutdown overhead.
+    """
+    result = get_all_gpu_info()
+    return next((g for g in result if g.get("id") == index), {})
 
 
 def get_driver_info() -> dict[str, str | None]:
@@ -95,20 +98,19 @@ def get_driver_info() -> dict[str, str | None]:
     try:
         pynvml = _get_pynvml()
         pynvml.nvmlInit()
+        try:
+            raw_driver = pynvml.nvmlSystemGetDriverVersion()
+            driver_version: str | None = (
+                raw_driver.decode("utf-8") if isinstance(raw_driver, bytes)
+                else str(raw_driver)
+            ).rstrip("\x00")
 
-        raw_driver = pynvml.nvmlSystemGetDriverVersion()
-        if isinstance(raw_driver, bytes):
-            driver_version: str | None = raw_driver.decode("utf-8").rstrip("\x00")
-        else:
-            driver_version = str(raw_driver).rstrip("\x00")
-
-        cuda_int = pynvml.nvmlSystemGetCudaDriverVersion()
-        # e.g. 12040 -> "12.4"
-        major = cuda_int // 1000
-        minor = (cuda_int % 1000) // 10
-        cuda_version: str | None = f"{major}.{minor}"
-
-        pynvml.nvmlShutdown()
+            cuda_int = pynvml.nvmlSystemGetCudaDriverVersion()
+            major = cuda_int // 1000
+            minor = (cuda_int % 1000) // 10
+            cuda_version: str | None = f"{major}.{minor}"
+        finally:
+            pynvml.nvmlShutdown()
 
         return {"driver_version": driver_version, "cuda_version": cuda_version}
     except Exception:

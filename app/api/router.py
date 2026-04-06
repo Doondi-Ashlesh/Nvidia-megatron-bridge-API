@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import checkpoints, health, jobs, peft, system, training
+from app.api import checkpoints, health, jobs, peft, system, training, ws
 
 router = APIRouter()
 
@@ -23,3 +23,6 @@ router.include_router(peft.router)
 
 # Phase 5: System info and GPU telemetry
 router.include_router(system.router)
+
+# Phase 6: WebSocket streaming
+router.include_router(ws.router)

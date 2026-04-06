@@ -6,8 +6,9 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import init_db
@@ -89,6 +90,20 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
     )
 
+    # ── Rate limiting ────────────────────────────────────────────────────────
+    from app.security.rate_limit import RateLimitMiddleware  # noqa: PLC0415
+    app.add_middleware(
+        RateLimitMiddleware,
+        requests_per_minute=settings.rate_limit_requests,
+    )
+
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    # Middleware is evaluated last-added first, so add auth before CORS so that
+    # unauthenticated requests are rejected before CORS headers are sent.
+    if settings.api_key:
+        from app.security.auth import ApiKeyMiddleware  # noqa: PLC0415
+        app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
+
     # ── CORS ──────────────────────────────────────────────────────────────────
     if settings.cors_origins_list:
         app.add_middleware(
@@ -101,6 +116,13 @@ def create_app() -> FastAPI:
 
     # ── Routes ────────────────────────────────────────────────────────────────
     app.include_router(router)
+
+    # ── Exception handlers ────────────────────────────────────────────────────
+    from app.services.job_service import QueueFullError  # noqa: PLC0415
+
+    @app.exception_handler(QueueFullError)
+    async def queue_full_handler(_req: Request, exc: QueueFullError) -> JSONResponse:
+        return JSONResponse(status_code=429, content={"detail": str(exc)})
 
     return app
 

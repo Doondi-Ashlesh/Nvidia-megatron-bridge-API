@@ -1,0 +1,133 @@
+name: Merge to Main
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly GPU tests at 02:00 UTC
+    - cron: "0 2 * * *"
+
+jobs:
+  # ── Re-run all PR checks first ────────────────────────────────────────────
+  pr-checks:
+    name: PR Checks (lint, test, security, schema)
+    uses: ./.github/workflows/pr.yml
+
+  # ── Tier 2: GPU Tests (self-hosted runner with GPU) ───────────────────────
+  test-gpu:
+    name: Test (GPU hardware)
+    runs-on: [self-hosted, gpu]
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    env:
+      GPU_AVAILABLE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install GPU dependencies
+        run: |
+          pip install --upgrade pip setuptools pybind11 wheel
+          pip install -e ".[dev]"
+          pip install --no-build-isolation "megatron-bridge>=0.3.1" || \
+            echo "megatron-bridge install skipped (no CUDA?)"
+
+      - name: Run GPU tests
+        run: |
+          python -m pytest tests/ -m gpu \
+            --cov=app --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+  # ── Docker Build & Push ───────────────────────────────────────────────────
+  docker-build-push:
+    name: Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: [pr-checks]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/megatronbridge-api:latest
+            ghcr.io/${{ github.repository_owner }}/megatronbridge-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Trivy Container Scan ──────────────────────────────────────────────────
+  trivy-scan:
+    name: Trivy Image Scan
+    runs-on: ubuntu-latest
+    needs: docker-build-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/megatronbridge-api:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+  # ── Smoke Test: docker compose up → /health ───────────────────────────────
+  smoke-test:
+    name: Smoke Test (docker compose)
+    runs-on: ubuntu-latest
+    needs: docker-build-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env for smoke test
+        run: |
+          cp .env.example .env
+          echo "DATABASE_URL=sqlite+aiosqlite:////data/megatronbridge.db" >> .env
+          echo "CORS_ORIGINS=" >> .env
+
+      - name: Start API service
+        run: docker compose up -d api
+
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health; then
+              echo "API healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "API failed to become healthy"
+          docker compose logs api
+          exit 1
+
+      - name: Verify /health response
+        run: |
+          STATUS=$(curl -sf http://localhost:8000/health | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d['status'])")
+          test "$STATUS" = "ok"
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -1,0 +1,53 @@
+# ── Version control ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Python bytecode / caches ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Secrets — never send to Docker daemon ────────────────────────────────────
+.env
+*.pem
+*.key
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+tests/
+.pytest_cache/
+.hypothesis/
+htmlcov/
+.coverage
+coverage.xml
+coverage.json
+
+# ── Linting / type checking ───────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+bandit_results.json
+
+# ── CI / docs / dev artifacts ────────────────────────────────────────────────
+.github/
+docs/
+*.md
+!migrations/
+
+# ── Runtime data (not needed in image) ───────────────────────────────────────
+data/
+*.db
+*.db-wal
+*.db-shm
+logs/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+.DS_Store

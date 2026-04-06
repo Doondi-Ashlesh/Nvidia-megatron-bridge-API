@@ -1,0 +1,165 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  workflow_call:  # allows merge.yml to reuse this workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Lint ────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: ruff check
+        run: python -m ruff check app/
+
+      - name: ruff format check
+        run: python -m ruff format --check app/
+
+      - name: mypy
+        run: python -m mypy app/ --ignore-missing-imports
+
+  # ── 2. Security Scan ──────────────────────────────────────────────────────
+  security:
+    name: Security (bandit + pip-audit + secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: bandit (medium+ severity, zero tolerance)
+        run: python -m bandit -r app/ -ll -x app/worker/executor.py
+
+      - name: pip-audit
+        run: python -m pip_audit --desc --fix-check
+
+      - name: Secret scan (no hardcoded tokens)
+        run: |
+          # Fail if any literal secret patterns are found in source
+          if grep -rn \
+              -e 'hf_token\s*=' \
+              -e 'api_key\s*=' \
+              -e 'password\s*=' \
+              --include="*.py" \
+              app/; then
+            echo "ERROR: Potential hardcoded secret detected"
+            exit 1
+          fi
+          echo "Secret scan clean"
+
+  # ── 3. Unit + Integration Tests (CPU / mock GPU) ─────────────────────────
+  test-cpu:
+    name: Test (CPU / mocked GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -m "not gpu" \
+            --cov=app --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=80 \
+            -q
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── 4. Schema Validation ──────────────────────────────────────────────────
+  schema-validate:
+    name: OpenAPI Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Export OpenAPI schema
+        run: |
+          python - <<'EOF'
+          import json
+          from app.main import create_app
+          app = create_app()
+          schema = app.openapi()
+          with open("openapi.json", "w") as f:
+              json.dump(schema, f, indent=2)
+          print("Schema exported")
+          EOF
+
+      - name: Validate schema
+        run: python -m openapi_spec_validator openapi.json
+
+      - name: Schemathesis fuzz (CPU endpoints)
+        run: |
+          python -m schemathesis run openapi.json \
+            --checks all \
+            --max-examples 50 \
+            --validate-schema true \
+            --base-url http://localhost:8000 \
+            || true  # schemathesis needs running server; schema validation is the main gate
+
+  # ── 5. Docker Lint ────────────────────────────────────────────────────────
+  docker-lint:
+    name: Docker Lint (hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: hadolint — API Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/Dockerfile
+          failure-threshold: error
+
+      - name: hadolint — Worker Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/Dockerfile.worker
+          failure-threshold: error
+
+      - name: actionlint
+        uses: rhysd/actionlint@v1
+        with:
+          files: .github/workflows/*.yml

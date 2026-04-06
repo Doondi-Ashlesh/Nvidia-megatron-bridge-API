@@ -32,6 +32,9 @@ class ExportRequest(BaseModel):
 
     source_name: str
     target_name: str
+    # Required: AutoBridge.from_hf_pretrained() needs the HF model ID to load
+    # architecture config even when exporting. E.g. "meta-llama/Llama-3-8B".
+    model_arch: str
     num_gpus: int = Field(default=1, ge=1, le=64)
 
 

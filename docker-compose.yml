@@ -1,0 +1,83 @@
+version: "3.9"
+
+# ── MegatronBridge API — Docker Compose ──────────────────────────────────────
+# Usage:
+#   docker compose up             # start API server (CPU-only)
+#   docker compose --profile gpu up  # also start GPU worker
+#
+# Prerequisites:
+#   - Copy .env.example → .env and fill in your values
+#   - For GPU profile: nvidia-container-toolkit installed, driver >= 550
+
+services:
+
+  # ── API Server (CPU-only) ────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: megatronbridge-api:latest
+    container_name: megatronbridge-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - app_data:/data
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite+aiosqlite:////data/megatronbridge.db
+      CHECKPOINTS_ROOT: /data/checkpoints
+      LOGS_ROOT: /data/logs
+      HF_CACHE_DIR: /data/hf_cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # No privileged mode — API server needs no GPU access
+    security_opt:
+      - no-new-privileges:true
+
+  # ── GPU Worker ───────────────────────────────────────────────────────────────
+  # Launched on-demand by the API dispatcher via torchrun.
+  # This service is only needed if you want the worker pre-warmed in the same
+  # compose stack; otherwise the dispatcher launches it as a subprocess.
+  worker:
+    profiles:
+      - gpu
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    image: megatronbridge-worker:latest
+    container_name: megatronbridge-worker
+    restart: "no"
+    volumes:
+      - app_data:/data
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite+aiosqlite:////data/megatronbridge.db
+      CHECKPOINTS_ROOT: /data/checkpoints
+      LOGS_ROOT: /data/logs
+      HF_CACHE_DIR: /data/hf_cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    security_opt:
+      - no-new-privileges:true
+    # Worker depends on shared /data volume being initialised by the API
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  app_data:
+    name: megatronbridge_data

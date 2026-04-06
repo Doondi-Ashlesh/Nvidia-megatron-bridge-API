@@ -1,0 +1,50 @@
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+!.env.example
+
+# ── Tests / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+coverage.json
+*.cover
+
+# ── Linting / type checking ───────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+
+# ── Hypothesis ────────────────────────────────────────────────────────────────
+.hypothesis/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+.docker/
+
+# ── Runtime data (generated at runtime — never commit) ────────────────────────
+/data/
+*.db
+*.db-wal
+*.db-shm
+logs/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.DS_Store
+bandit_results.json
+openapi.json

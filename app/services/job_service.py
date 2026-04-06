@@ -88,10 +88,15 @@ async def list_jobs(
     *,
     status: JobStatus | None = None,
     job_type: JobType | None = None,
+    job_types: list[JobType] | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return (items, total_count) with optional filters."""
+    """Return (items, total_count) with optional filters.
+
+    ``job_types`` (plural) accepts multiple types and generates an IN clause.
+    ``job_type`` (singular) is kept for backward-compatibility.
+    """
     db.row_factory = aiosqlite.Row
 
     conditions: list[str] = []
@@ -100,7 +105,11 @@ async def list_jobs(
     if status is not None:
         conditions.append("status = ?")
         params.append(status.value)
-    if job_type is not None:
+    if job_types is not None:
+        placeholders = ",".join("?" * len(job_types))
+        conditions.append(f"type IN ({placeholders})")  # noqa: S608
+        params.extend(jt.value for jt in job_types)
+    elif job_type is not None:
         conditions.append("type = ?")
         params.append(job_type.value)
 
@@ -126,6 +135,23 @@ async def list_jobs(
 # ---------------------------------------------------------------------------
 
 
+async def delete_job(db: aiosqlite.Connection, job_id: str) -> bool:
+    """Permanently delete a job record. Returns True if deleted, False if not found.
+
+    Callers must ensure the job is in a terminal state before calling this.
+    """
+    cursor = await db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    await db.commit()
+    deleted = cursor.rowcount > 0
+    if deleted:
+        logger.info("Job %s permanently deleted", job_id)
+    return deleted
+
+
+class QueueFullError(Exception):
+    """Raised when the QUEUED job count would exceed MAX_QUEUED_JOBS."""
+
+
 async def create_job(
     db: aiosqlite.Connection,
     *,
@@ -133,7 +159,26 @@ async def create_job(
     payload: dict[str, Any],
     num_gpus: int = 1,
 ) -> str:
-    """Insert a new QUEUED job. Returns the new job ID."""
+    """Insert a new QUEUED job. Returns the new job ID.
+
+    Raises ``QueueFullError`` if the number of currently QUEUED jobs already
+    equals or exceeds ``settings.max_queued_jobs``.
+    """
+    from app.config import settings  # noqa: PLC0415 — lazy to avoid circular import
+
+    count_cursor = await db.execute(
+        "SELECT COUNT(*) FROM jobs WHERE status = ?", (JobStatus.QUEUED.value,)
+    )
+    count_row = await count_cursor.fetchone()
+    queued_count: int = count_row[0] if count_row else 0
+
+    if queued_count >= settings.max_queued_jobs:
+        msg = (
+            f"Job queue is full ({queued_count}/{settings.max_queued_jobs} queued). "
+            "Wait for running jobs to finish or delete stale jobs."
+        )
+        raise QueueFullError(msg)
+
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     await db.execute(

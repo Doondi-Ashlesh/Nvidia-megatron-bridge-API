@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+aiosqlite
+aiofiles
+pydantic
+pydantic-settings
+websockets
+pynvml
+pytest
+pytest-asyncio
+httpx
+ruff
+mypy

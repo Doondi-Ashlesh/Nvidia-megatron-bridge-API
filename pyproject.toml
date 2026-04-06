@@ -1,0 +1,169 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "megatronbridge-api"
+version = "0.1.0"
+description = "Open-source REST API wrapper around Nvidia's MegatronBridge Python SDK"
+requires-python = ">=3.12"
+keywords = ["nvidia", "megatron", "llm", "api", "fastapi", "gpu"]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "aiosqlite>=0.20.0",
+    "aiofiles>=24.1.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "websockets>=12.0",
+    "pynvml>=11.5.0",
+]
+
+[project.optional-dependencies]
+gpu = [
+    # megatron-bridge v0.3.1 — real PyPI package, verified March 2026
+    # Requires: CUDA >= 12.8, PyTorch >= 2.7, Python >= 3.12
+    # Cannot be installed or imported on CPU-only machines (Transformer Engine CUDA dep)
+    # Install sequence:
+    #   pip install torch setuptools pybind11 wheel_stub
+    #   pip install --no-build-isolation megatron-bridge
+    # NGC container (recommended): nvcr.io/nvidia/nemo:<TAG>
+    "torch>=2.7.0",
+    "megatron-bridge>=0.3.1",
+]
+s3 = [
+    "boto3>=1.34.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "httpx>=0.27.0",
+    "anyio>=4.4.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "bandit[toml]>=1.7.9",
+    "pip-audit>=2.7.3",
+    "schemathesis>=3.34.0",
+    "openapi-spec-validator>=0.7.1",
+]
+
+[project.scripts]
+megatronbridge-api = "app.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"
+markers = [
+    "gpu: requires Nvidia GPU hardware (deselect with '-m not gpu')",
+    "slow: marks tests as slow",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = ["tests/*", "*/migrations/*", "app/worker/executor.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "S",        # flake8-bandit (security)
+    "B",        # flake8-bugbear
+    "A",        # flake8-builtins (shadowing)
+    "C4",       # flake8-comprehensions
+    "T20",      # flake8-print (no print() in prod)
+    "SIM",      # flake8-simplify
+    "TID",      # flake8-tidy-imports
+    "ERA",      # eradicate (no commented-out code)
+    "ASYNC",    # flake8-async
+    "G",        # flake8-logging-format
+    "PERF",     # perflint
+    "PTH",      # flake8-use-pathlib
+]
+ignore = [
+    "S101",   # assert allowed in tests (overridden per-file)
+    "B008",   # FastAPI Depends() in function defaults is fine
+    "ERA001", # allow commented code in config files
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "T20"]
+"migrations/**" = ["ERA001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+
+# Phase 1 — strict typed defs on security-critical modules
+[[tool.mypy.overrides]]
+module = ["app.utils.paths", "app.config", "app.database"]
+disallow_untyped_defs = true
+warn_return_any = true
+
+# Phase 2 — strict on launcher (command injection boundary)
+[[tool.mypy.overrides]]
+module = ["app.worker.launcher"]
+disallow_untyped_defs = true
+disallow_any_generics = true
+strict_optional = true
+warn_unused_ignores = true
+
+# Phase 4 — strict on config container
+[[tool.mypy.overrides]]
+module = ["app.schemas.config_container"]
+disallow_untyped_defs = true
+disallow_any_generics = true
+
+# pynvml has no stubs
+[[tool.mypy.overrides]]
+module = ["pynvml", "megatron.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# bandit
+# ---------------------------------------------------------------------------
+[tool.bandit]
+skips = ["B101"]  # assert statements OK in tests
+tests = [
+    "B102", "B105", "B106", "B110",
+    "B201", "B301", "B303", "B311", "B324",
+    "B501",
+    "B602", "B603", "B604", "B605", "B606", "B607",
+]

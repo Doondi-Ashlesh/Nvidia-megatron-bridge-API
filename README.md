@@ -6,6 +6,7 @@ An open-source **REST + WebSocket API** wrapper around [Nvidia's MegatronBridge]
 [![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen)](https://github.com/Doondi-Ashlesh/Nvidia-megatron-bridge-API)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Doondi-Ashlesh/Nvidia-megatron-bridge-API/blob/master/notebooks/colab_quickstart.ipynb)
 
 ---
 
@@ -91,6 +92,8 @@ If you ever need multi-node (API server and workers on different machines), swap
 ---
 
 ## Quick Start
+
+> For full deployment instructions (Colab, bare metal DGX, AWS/GCP, Docker) see [`docs/deployment.md`](docs/deployment.md).
 
 ### CPU-only (API server, development)
 

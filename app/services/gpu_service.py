@@ -20,6 +20,9 @@ GPU_PEAK_TFLOPS: dict[str, float] = {
     "NVIDIA A100 PCIe 40GB": 312.0,
     "NVIDIA A10G": 125.0,
     "NVIDIA RTX 6000 Ada Generation": 91.1,
+    # Blackwell (GB202) — RTX PRO 6000 Server Edition, 95.6 GB GDDR7
+    # Source: Nvidia RTX PRO 6000 Blackwell datasheet (BF16 Tensor Core, dense)
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition": 838.0,
     "NVIDIA RTX 4090": 82.6,
     "NVIDIA RTX 3090": 35.6,
 }

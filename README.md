@@ -1,6 +1,5 @@
 # MegatronBridge API
 
-
 An open-source **REST + WebSocket API** wrapper around [Nvidia's MegatronBridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) Python SDK, making large-scale LLM pretraining, fine-tuning, and checkpoint conversion accessible from any language, tool, or LLM agent over HTTP.
 
 [![PR Checks](https://github.com/Doondi-Ashlesh/Nvidia-megatron-bridge-API/actions/workflows/pr.yml/badge.svg)](https://github.com/Doondi-Ashlesh/Nvidia-megatron-bridge-API/actions/workflows/pr.yml)

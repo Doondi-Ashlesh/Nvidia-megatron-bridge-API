@@ -22,12 +22,24 @@ This document covers how to run MegatronBridge API in different environments —
 ```
 Python:  3.12.13
 PyTorch: 2.10.0+cu128
-CUDA:    12.8
-GPU:     NVIDIA H100 80GB HBM3
+CUDA:    12.8 toolkit  (driver reports CUDA 13.0 — see compatibility notes below)
+GPU:     NVIDIA RTX PRO 6000 Blackwell Server Edition (95.6 GB GDDR7)
 Driver:  580.82.07
 ```
 
 All three requirements met: Python ≥ 3.12 ✅, PyTorch ≥ 2.7 ✅, CUDA ≥ 12.8 ✅.
+
+### Colab compatibility notes
+
+Several version conflicts exist between megatron-bridge 0.3.1 and Colab's default environment. All are fixed in the quickstart notebook. The table below explains each one:
+
+| Issue | Cause | Fix |
+|---|---|---|
+| `megatron-core[dev,mlm]` resolution conflict | Dev extras pull in packages that clash with Colab | `pip install megatron-bridge --no-deps`, then `pip install megatron-core` separately |
+| `libcublas.so.13: not found` | Driver reports CUDA 13.0 but installed toolkit is 12.8; only `libcublas.so.12` is present | Use `transformer-engine[core_cu12]` not `core_cu13` |
+| `transformer-engine==2.13.0` incompatible | megatron-bridge 0.3.1 requires `<2.13.0` | Pin `"transformer-engine[core_cu12,pytorch]>=2.10.0,<2.13.0"` |
+| `transformers==5.0.0` incompatible | megatron-bridge 0.3.1 requires `<5.0.0` | Pin `"transformers<5.0.0"` |
+| Worker subprocess cannot find CUDA libs | `LD_LIBRARY_PATH` not inherited from notebook env | Set before starting uvicorn; pass `env=os.environ.copy()` to `Popen` |
 
 ### Limitations vs production
 
